@@ -1,545 +1,263 @@
 # AI-Assisted Contract Review & Risk Triage
 
-### Team Members
+**Break Through Tech AI Studio, Fall 2026 · Challenge project with Accenture**
 
-| Name | GitHub Handle | Main Contribution |
-|---|---|---|
-| [Name] | @[handle] | [Contribution] |
-| [Name] | @[handle] | [Contribution] |
-| [Name] | @[handle] | [Contribution] |
-| [Name] | @[handle] | [Contribution] |
-| [Name] | @[handle] | [Contribution] |
-| [Name] | @[handle] | [Contribution] |
-| [Name] | @[handle] | [Contribution] |
+An NLP pipeline that reads commercial contracts, detects 41 types of legally important clauses with a fine-tuned **DistilRoBERTa** model, and ranks contracts into **Low / Medium / High** review priority with an explainable, rule-based risk score.
 
-### Challenge Advisor
-- [Name]
-- [Role / Organization]
+![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?logo=pytorch&logoColor=white)
+![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Transformers-FFD21E?logo=huggingface&logoColor=black)
+![scikit-learn](https://img.shields.io/badge/scikit--learn-F7931E?logo=scikitlearn&logoColor=white)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/naeemexe/ai-contract-risk-triage/blob/main/notebooks/quickstart_demo.ipynb)
 
-### AI Studio Coach
-- [Name]
+> This is my portfolio copy of the team repository [Break-Through-Tech/Accenture-1F-contract-review-challenge](https://github.com/Break-Through-Tech/Accenture-1F-contract-review-challenge). It adds a quickstart notebook, a sample dataset, and full documentation.
+
+---
+
+## Table of Contents
+
+- [Project Overview](#project-overview)
+- [Objectives and Goals](#objectives-and-goals)
+- [Methodology](#methodology)
+- [Results and Key Findings](#results-and-key-findings)
+- [Visualizations](#visualizations)
+- [Installation](#installation)
+- [Usage: Train and Evaluate](#usage-train-and-evaluate)
+- [Sample Dataset](#sample-dataset)
+- [Notebooks](#notebooks)
+- [Documentation](#documentation)
+- [Repository Structure](#repository-structure)
+- [Potential Next Steps](#potential-next-steps)
+- [Individual Contributions](#individual-contributions)
+- [Team](#team)
+- [Limitations](#limitations)
+- [Acknowledgments and License](#acknowledgments-and-license)
 
 ---
 
 ## Project Overview
 
-This project was developed as part of the **Break Through Tech AI Studio Fall 2026** program in collaboration with **Accenture**.
+Legal and procurement teams review hundreds of contracts to find clauses that create risk, such as uncapped liability, exclusivity, or change-of-control terms. Reading every contract in full is slow and expensive.
 
-The goal is to build an AI-assisted contract review pipeline that helps legal and procurement teams identify important contract clauses and prioritize contracts for further review.
+This project builds an **AI-assisted triage pipeline** that:
 
-Using the **Contract Understanding Atticus Dataset (CUAD)**, the project combines:
+1. splits long contracts into model-sized chunks without losing text,
+2. detects which of the 41 CUAD clause categories each contract contains,
+3. scores each contract's risk with transparent rules, and
+4. ranks contracts so human reviewers look at the riskiest ones first.
 
-- exploratory data analysis and class imbalance analysis
-- contract chunking and preprocessing
-- multi-label clause classification
-- TF-IDF and transformer-based modeling
-- explainable rule-based risk scoring
+The system supports human reviewers. It does not give legal advice or replace legal review.
 
-The intended workflow is:
+## Objectives and Goals
+
+- **Detect clauses accurately** across 41 highly imbalanced categories, measured by per-category precision, recall, and F1.
+- **Beat a classical baseline**: outperform TF-IDF + Logistic Regression on a fixed set of 7 benchmark categories.
+- **Make risk explainable**: every point of a contract's risk score traces back to a named clause or rule.
+- **Keep it reproducible**: official CUAD splits, fixed seeds, scripted pipeline, and documented results.
+
+## Methodology
 
 ```text
-CUAD Contracts
+CUAD contracts (510)
+      ↓  EDA, cleaning, class-imbalance analysis
+Paragraph-aware chunking (480 tokens, 64-token overlap, ~99% span coverage)
       ↓
-EDA & Preprocessing
+Multi-label clause classification
+      TF-IDF + Logistic Regression baseline  →  fine-tuned DistilRoBERTa
+      ↓  class weighting + per-category threshold tuning
+Contract-level predictions (max probability over chunks)
       ↓
-Paragraph-Aware Chunking
+Rule-based risk scoring (4 auditable signals)
       ↓
-Multi-Label Clause Classification
-TF-IDF Baseline → DistilRoBERTa
-      ↓
-Per-Category Precision / Recall / F1
-      ↓
-Clause-Level Risk Assessment
-      ↓
-Contract-Level Risk Triage
+Low / Medium / High triage + clause register with evidence
 ```
 
-The system is intended to support human reviewers by helping surface potentially important clauses. It is not intended to replace legal review or provide legal conclusions.
+**Data.** The [Contract Understanding Atticus Dataset (CUAD v1)](https://www.atticusprojectai.org/cuad): 510 commercial contracts, 41 expert-annotated clause categories, 13,823 annotated spans. We keep CUAD's official contract-level split (408 train / 102 test) so chunks from one contract never appear in both sets. 40 training contracts are held out for validation.
 
----
+**Chunking.** Contracts average ~28 chunks each under a 512-token model limit. The paragraph-aware chunker keeps paragraphs intact where possible. A label is 1 if a clause is fully inside a chunk, 0 if absent, and masked if it only partially overlaps, so the loss ignores ambiguous cases.
 
-## Dataset
+**Models.**
+- *Baseline:* TF-IDF (1-2 grams) + one Logistic Regression per category with balanced class weights.
+- *Transformer:* `distilroberta-base` with 41 sigmoid outputs and masked binary cross-entropy. Rare classes are up-weighted by √(neg/pos), capped at 30. Decision thresholds are tuned per category on validation data.
 
-We use the **CUAD dataset**, which contains:
+**Risk scoring.** Clause categories carry a Low / Medium / High level from an advisor-reviewed rubric (`evaluation/risk_rubric.md`). The score combines four signals: (1) clauses present, weighted by level and confidence; (2) a severity floor for confident High-risk clauses; (3) missing protections, such as no cap on liability; (4) risky combinations, such as exclusivity plus minimum commitment. Bucket cutoffs are percentiles of the training contracts' scores.
 
-- **510 commercial contracts**
-- **41 expert-annotated contract clause categories**
-- **13,823 annotated answer spans**
+## Results and Key Findings
 
-The project preserves CUAD's official contract-level train/test split:
+| Model | Macro F1, 7 benchmark categories | Macro F1, 19 risk categories | Macro F1, all 40 evaluable | Micro F1 |
+|---|---:|---:|---:|---:|
+| TF-IDF + Logistic Regression | 0.592 | n/a | n/a | n/a |
+| DistilRoBERTa, unweighted, threshold 0.5 | 0.084 | 0.111 | 0.164 | 0.529 |
+| **DistilRoBERTa, sqrt-weighted, tuned thresholds** | **0.706** | **0.694** | **0.596** | **0.752** |
 
-- **408 training contracts**
-- **102 test contracts**
+*Contract-level scores on the 102-contract CUAD test set. Full tables: [`training/results/distilroberta_baseline/RESULTS.md`](training/results/distilroberta_baseline/RESULTS.md).*
 
-Splitting at the contract level prevents chunks from the same contract from appearing in both training and testing.
+**Key findings**
 
-Contract text is available directly in the JSON files through the `context` field, so raw PDFs do not need to be parsed.
+- **Class weighting is essential.** Without it, the transformer predicts almost nothing for rare categories (macro F1 0.16). Square-root weighting plus tuned thresholds lifts this to 0.60.
+- **The transformer beats TF-IDF on 5 of 7 benchmark categories**, with large gains on Insurance (0.92 vs 0.62), Renewal Term (0.72 vs 0.41), and Notice Period to Terminate Renewal (0.63 vs 0.42).
+- **Change of Control is the main weakness** (0.37 vs 0.55 for TF-IDF). It is rated High risk, so the risk layer adds a keyword backstop rule for it.
+- **Categories with 3 or fewer test contracts score 0.** More data or few-shot methods are needed for these.
+- **Fixing the chunker mattered.** An early version dropped contract text when counting tokens. The fix raised annotated-span coverage to about 99%.
 
-### Data Files
+## Visualizations
 
-Key data files are located under:
-
-```text
-data/cuad/
-```
-
-The modeling pipeline currently uses the official CUAD training and test JSON files.
-
----
-
-## Category Scope
-
-The project currently uses different category scopes for different stages of the pipeline.
-
-### Risk Analysis Scope
-
-The risk framework currently contains **19 selected CUAD categories** covering major contract-risk areas such as:
-
-- liability
-- assignment and control
-- termination
-- intellectual property
-- licensing
-- competition restrictions
-- commercial obligations
-- compliance
-
-These categories are assigned preliminary **Low / Medium / High** risk levels in:
-
-```text
-evaluation/risk_rubric.md
-```
-
-### Baseline Comparison Scope
-
-The initial TF-IDF baseline evaluates the following **7 categories**:
-
-- Anti-Assignment
-- Change Of Control
-- Insurance
-- Renewal Term
-- Notice Period To Terminate Renewal
-- Audit Rights
-- Termination For Convenience
-
-These categories serve as a consistent benchmark for comparing classical and transformer-based models.
-
-### Transformer Modeling Scope
-
-The DistilRoBERTa pipeline can include additional CUAD categories when they have sufficient positive training support.
-
-The current dataset preparation script includes categories with at least **10 fully-contained positive training chunks**.
-
-For an apples-to-apples comparison, transformer performance is also reported separately on the same 7 TF-IDF baseline categories.
-
-### Scope Decision
-
-- The classifier **detects all 41 CUAD categories**.
-- The **risk score uses the 19 rubric categories** in `evaluation/risk_categories.csv`.
-- The identification categories (Document Name, Parties, Agreement/Effective/Expiration Date, Governing Law) feed the clause register as **contract metadata**.
-- The remaining categories are reported but carry **no risk weight** until the advisor assigns them a level.
-
----
-
-## Exploratory Data Analysis
-
-Exploratory analysis focused on understanding:
-
-- class imbalance across CUAD categories
-- positive vs. negative prevalence
-- train/test category support
-- contract and annotation length
-- category overlap
-- formatting and cleaning issues
-- chunking requirements
-
-The EDA confirmed substantial imbalance across categories.
-
-Some categories appear in most contracts, while others appear in only a small number. Because of this imbalance, overall accuracy is not treated as the primary evaluation metric.
-
-Instead, the project emphasizes:
-
-- Precision
-- Recall
-- F1-score
-- Per-category support
-
-The EDA notebook is located at:
-
-```text
-notebooks/CUAD_EDA.ipynb
-```
-
----
-
-## Preprocessing & Chunking
-
-Contracts can be much longer than the maximum sequence length supported by transformer models, so they must be divided into smaller sections.
-
-The project uses a **paragraph-aware chunking strategy** based on:
-
-- **480 tokens per chunk**
-- **64-token overlap**
-- the `distilroberta-base` tokenizer
-
-The overlap helps preserve clauses that occur near chunk boundaries.
-
-With DistilRoBERTa, **98.6% of annotated train spans and 99.2% of test spans** fit entirely inside a single chunk. An earlier version of the chunker miscounted tokens under RoBERTa's tokenizer and silently dropped about 1% of contract text (coverage about 95–96%). See [`Week 3/CHUNKER_TOKEN_COUNT_FIX.md`](Week%203/CHUNKER_TOKEN_COUNT_FIX.md). `prepare_dataset.py` now fails if any contract text is left out of the chunks, and reports coverage in `chunking_summary.csv`.
-
-### Chunk Labeling
-
-Each chunk-category pair is labeled using the CUAD answer spans:
-
-- **Fully contained annotation → positive**
-- **Partial-only overlap → masked**
-- **No overlap → negative**
-
-Partial-overlap cases are ignored during training rather than incorrectly being treated as negatives.
-
-Dataset preparation is implemented in:
-
-```text
-training/prepare_dataset.py
-```
-
-Generated outputs include:
-
-```text
-train_chunks.csv
-test_chunks.csv
-train_tokenized.pt
-test_tokenized.pt
-labels.json
-dataset_summary.csv
-chunking_summary.csv
-```
-
-Generated data is excluded from Git tracking and can be regenerated from the scripts.
-
----
-
-## TF-IDF Baseline
-
-The initial machine-learning baseline uses:
-
-- **TF-IDF features**
-- unigram + bigram features
-- **Logistic Regression**
-- balanced class weighting
-- CUAD's official train/test split
-
-The baseline provides a simple reference point before using a transformer model.
-
-### Baseline Results
-
-| Category | Precision | Recall | F1 |
-|---|---:|---:|---:|
-| Anti-Assignment | 0.807 | 0.931 | 0.865 |
-| Audit Rights | 0.638 | 0.789 | 0.706 |
-| Insurance | 0.583 | 0.656 | 0.618 |
-| Termination For Convenience | 0.514 | 0.655 | 0.576 |
-| Change Of Control | 0.517 | 0.577 | 0.545 |
-| Notice Period To Terminate Renewal | 0.412 | 0.438 | 0.424 |
-| Renewal Term | 0.393 | 0.423 | 0.407 |
-
-The strongest baseline performance is on **Anti-Assignment**, while the renewal-related categories perform substantially worse.
-
-One likely limitation is that whole-contract TF-IDF treats a long contract as a single bag of words, which can dilute short but important clauses.
-
-The baseline notebook is located at:
-
-```text
-notebooks/naeem_tfidf_baseline_risk_rules.ipynb
-```
-
----
-
-## Transformer Model
-
-The next modeling stage uses **DistilRoBERTa** for multi-label clause classification.
-
-The training pipeline includes:
-
-- `distilroberta-base`
-- one output probability per clause category
-- sigmoid multi-label classification
-- masked binary cross-entropy loss
-- contract-level train/validation splitting
-- chunk-level and contract-level evaluation
-- optional positive-class weighting
-
-### Data Splits
-
-The official CUAD train/test split is preserved.
-
-Within the 408 official training contracts, approximately **10% of contracts are held out for validation**.
-
-Validation is performed at the contract level so chunks from the same contract cannot appear in both the training and validation sets.
-
-The official 102-contract test set remains separate for final evaluation.
-
-Training code is located at:
-
-```text
-training/train_distilroberta.py
-```
-
-A Google Colab runner is available at:
-
-```text
-notebooks/naeem_distilroberta_finetune_colab.ipynb
-```
-
----
-
-## Class Imbalance Handling
-
-CUAD contains significant imbalance both:
-
-- **between categories**, where some labels have hundreds more positive examples than others
-- **within categories**, where negative examples can significantly outnumber positives
-
-The transformer training pipeline supports positive-class weighting using the ratio of negative to positive examples for each category.
-
-Adopted approach (see [`training/results/distilroberta_baseline/RESULTS.md`](training/results/distilroberta_baseline/RESULTS.md)):
-
-- **Positive-class weighting of √(neg/pos), capped at 30** (`--pos-weight-mode sqrt`). Without weighting, rare categories collapse to "never present"; raw neg/pos weights (~600) are too extreme.
-- **Per-category thresholds tuned on validation**, separately for chunk and contract level (`training/evaluate.py`).
-- **Checkpoint selection by validation macro F1**, so frequent, easy categories don't dominate.
-
----
-
-## Results
-
-DistilRoBERTa (3 epochs, sqrt weighting, tuned thresholds), contract level on the official test set:
-
-| | Macro F1 |
-|---|---:|
-| 7 TF-IDF baseline categories | **0.706** (TF-IDF: 0.592) |
-| 19 risk-rubric categories | 0.694 |
-| All 40 evaluable categories | 0.596 |
-
-It beats TF-IDF on 5 of 7 categories, with the largest gains on Insurance, Renewal Term and Notice Period To Terminate Renewal. It trails on Change Of Control, the main weakness to address. Full per-category metrics, threshold tables and error analysis: [`training/results/distilroberta_baseline/`](training/results/distilroberta_baseline/).
-
----
-
-## Risk Assessment Framework
-
-The classification model identifies **what type of clause is present**.
-
-A separate risk layer is responsible for estimating **how concerning that clause may be**.
-
-The project currently uses three preliminary risk levels:
-
-| Risk Level | Meaning |
+| Class imbalance in CUAD | DistilRoBERTa vs. TF-IDF |
 |---|---|
-| **Low** | Mostly routine or limited-consequence obligations |
-| **Medium** | Meaningful restrictions or obligations whose impact depends on context |
-| **High** | Potentially significant financial, legal, ownership, or strategic consequences |
+| ![Class imbalance](Week%202/results/class_imbalance_train.png) | ![Model comparison](docs/images/model_comparison_f1.png) |
 
-The current framework includes **19 selected CUAD categories** with an initial risk assignment and justification.
+| Chunking: coverage vs. redundancy | Risk triage on the sample dataset |
+|---|---|
+| ![Chunking coverage](Week%203/results/coverage_vs_redundancy.png) | ![Risk triage](docs/images/sample_risk_triage.png) |
 
-Examples include:
+## Installation
 
-- **Uncapped Liability → High**
-- **Change Of Control → High**
-- **IP Ownership Assignment → High**
-- **Anti-Assignment → Medium**
-- **License Grant → Medium**
+Requirements: Python 3.10+, Git, and about 2 GB of disk space. A GPU is optional for the quickstart and recommended for training (a free Colab T4 works).
 
-The full rubric is available at:
+```bash
+# 1. Clone the repository
+git clone https://github.com/naeemexe/ai-contract-risk-triage.git
+cd ai-contract-risk-triage
 
-```text
-evaluation/risk_rubric.md
+# 2. Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+
+# 3. Install dependencies
+pip install -r requirements.txt
 ```
 
-Structured category labels are available at:
+The full CUAD data is already included in `data/cuad/`, so no download is needed.
 
-```text
-evaluation/risk_categories.csv
+**Check the install** by running the quickstart notebook (about 1 minute on a laptop CPU):
+
+```bash
+jupyter notebook notebooks/quickstart_demo.ipynb
 ```
 
-These labels are preliminary category-level assumptions, not ground-truth CUAD risk labels.
+## Usage: Train and Evaluate
 
-Actual clause-level risk may vary based on:
+Run these from the repository root.
 
-- financial exposure
-- scope
-- duration
-- affected parties
-- exceptions
-- ownership consequences
-- termination consequences
-- business restrictions
+**Step 1. Prepare the dataset.** Chunks and tokenizes every contract, checks that no text is dropped, and writes to `training/data/`.
 
----
+```bash
+python training/prepare_dataset.py
+```
+
+**Step 2. Train the model.** About 10 minutes per epoch on an Apple M4 Pro or a Colab T4.
+
+```bash
+# Quick smoke test (1 epoch, 64 examples)
+python training/train_distilroberta.py --epochs 1 --limit 64
+
+# Recommended model: square-root class weighting
+python training/train_distilroberta.py --epochs 3 --pos-weight-mode sqrt --out training/outputs/sqrt_weighted
+```
+
+No local GPU? Open [`notebooks/naeem_distilroberta_finetune_colab.ipynb`](notebooks/naeem_distilroberta_finetune_colab.ipynb) in Colab and choose a T4 GPU runtime.
+
+**Step 3. Evaluate.** Tunes per-category thresholds on validation data, then reports chunk- and contract-level metrics, the TF-IDF comparison, and an error analysis.
+
+```bash
+python training/evaluate.py --runs training/outputs/sqrt_weighted
+```
+
+**Step 4. Score contract risk.**
+
+```bash
+# Ceiling: score using the expert annotations
+python risk/score_contracts.py --source gold
+
+# Score using model predictions
+python risk/score_contracts.py --source model --run training/outputs/sqrt_weighted
+```
+
+Outputs go to `risk/outputs/`: a ranked `contract_scores.csv`, a `clause_register.csv` with evidence text, and a `sensitivity.csv` that shows how stable the ranking is.
+
+## Sample Dataset
+
+[`data/sample/`](data/sample/) holds 10 contracts from the CUAD test split for quick experiments:
+
+- `sample_contracts.json`: contracts in CUAD's SQuAD-style JSON format (works with every script that takes `--test`)
+- `sample_clause_labels.csv`: one row per contract and category, with a presence flag and the first annotated span
+
+```bash
+python risk/score_contracts.py --source gold --test data/sample/sample_contracts.json --out risk/outputs/sample
+```
+
+See [`data/sample/README.md`](data/sample/README.md) for the schema.
+
+## Notebooks
+
+| Notebook | What it shows |
+|---|---|
+| [`quickstart_demo.ipynb`](notebooks/quickstart_demo.ipynb) | End-to-end demo on the sample data: explore, detect clauses with TF-IDF, score risk, explain the top result. CPU only. |
+| [`naeem_distilroberta_finetune_colab.ipynb`](notebooks/naeem_distilroberta_finetune_colab.ipynb) | Fine-tune DistilRoBERTa on a Colab GPU. |
+| [`naeem_tfidf_baseline_risk_rules.ipynb`](notebooks/naeem_tfidf_baseline_risk_rules.ipynb) | TF-IDF + Logistic Regression baseline and the first risk-tier rules. |
+| [`CUAD_EDA.ipynb`](notebooks/CUAD_EDA.ipynb) | Exploratory data analysis: imbalance, lengths, overlap. |
+| [`JSONtoDF.ipynb`](notebooks/JSONtoDF.ipynb) | Convert CUAD JSON to pandas DataFrames. |
+
+## Documentation
+
+- [**User Guide**](docs/USER_GUIDE.md): how to run the pipeline, read the outputs, and change the risk rules.
+- [**API Reference**](docs/API.md): every script's command-line options and the main Python functions.
+- [Training pipeline details](training/README.md) · [Risk scoring rules](risk/README.md) · [Risk rubric](evaluation/risk_rubric.md) · [Chunking study](Week%203/WEEK3_README_DETAILED.md) · [Challenge overview](Challenge-Project-Overview.md)
 
 ## Repository Structure
 
 ```text
 .
 ├── data/
-│   └── cuad/
-│
-├── Week 3/
-│   ├── tokenizer_chunking_experiment.py
-│   ├── TOKENIZER_CHUNKING_NEXT_STEP.md
-│   ├── CHUNKER_TOKEN_COUNT_FIX.md
-│   └── ...
-│
-├── evaluation/
-│   ├── risk_categories.csv
-│   └── risk_rubric.md
-│
-├── notebooks/
-│   ├── CUAD_EDA.ipynb
-│   ├── JSONtoDF.ipynb
-│   ├── naeem_tfidf_baseline_risk_rules.ipynb
-│   └── naeem_distilroberta_finetune_colab.ipynb
-│
-├── training/
-│   ├── prepare_dataset.py
-│   ├── train_distilroberta.py
-│   ├── requirements.txt
-│   └── README.md
-│
-├── risk/
-│   ├── score_contracts.py
-│   ├── risk_rules.json
-│   └── README.md
-│
-├── Challenge-Project-Overview.md
-└── README.md
+│   ├── cuad/              full CUAD v1 dataset (official train/test JSON)
+│   └── sample/            10-contract sample for quick tests
+├── docs/                  user guide, API reference, figures
+├── notebooks/             quickstart, EDA, baseline, Colab training
+├── training/              dataset prep, DistilRoBERTa training, evaluation, results
+├── risk/                  rule-based risk scoring and its rules file
+├── evaluation/            risk rubric and category levels
+├── tests/                 unit tests for the risk scorer
+├── Week 2/, Week 3/       cleaning, imbalance, and chunking experiments
+└── requirements.txt
 ```
 
----
+## Potential Next Steps
 
-## Setup
+- **Fix the weakest High-risk category.** Improve Change of Control recall with data augmentation or a dedicated classifier.
+- **More robust thresholds.** Use cross-validation instead of 40 validation contracts.
+- **Calibrate risk cutoffs** for model confidences. The model currently under-ranks Medium contracts.
+- **Validate with experts.** Compare rankings against advisor-reviewed examples using rank and bucket agreement.
+- **Try longer-context models** (Longformer, legal-domain BERT) to reduce chunking errors.
+- **Ship a demo.** Wrap the pipeline in a simple web app where a reviewer uploads a contract and sees highlighted clauses and the risk explanation.
 
-Clone the repository:
+## Individual Contributions
 
-```bash
-git clone https://github.com/Break-Through-Tech/Accenture-1F-contract-review-challenge.git
-cd Accenture-1F-contract-review-challenge
-```
+**Md Naeem Islam ([@naeemexe](https://github.com/naeemexe))**
 
-Install training dependencies:
+- Built the **TF-IDF + Logistic Regression baseline** on CUAD's official train/test split. It became the benchmark every later model is compared against.
+- Drafted the **initial risk-tier rules** that map clause categories to Low / Medium / High risk.
+- Implemented the **DistilRoBERTa multi-label fine-tuning pipeline**: `training/prepare_dataset.py` (chunking, tokenizing, label masking, coverage checks), `training/train_distilroberta.py` (masked BCE, class weighting, mixed precision, best-epoch selection), and the Colab training notebook.
+- For this portfolio version: wrote the quickstart notebook, built the sample dataset, and wrote the user guide and API reference.
 
-```bash
-pip install -r training/requirements.txt
-```
+## Team
 
-### Prepare the Dataset
+| Name | GitHub | Main contribution |
+|---|---|---|
+| Md Naeem Islam | [@naeemexe](https://github.com/naeemexe) | TF-IDF baseline, DistilRoBERTa training pipeline |
+| Barry | [@barryz-cmu](https://github.com/barryz-cmu) | Cleaning, chunking, chunker fix, model training and evaluation |
+| Jasmin Chan | [@tsunderii](https://github.com/tsunderii) | EDA, risk rubric, risk error analysis, documentation |
+| Tobias Lin | [@TobiasLin6](https://github.com/TobiasLin6) | JSON-to-DataFrame conversion, rule-based risk-scoring layer |
+| Parth Dali | [@parthd06](https://github.com/parthd06) | Project overview, data files, team coordination |
 
-```bash
-python training/prepare_dataset.py
-```
-
-### Train DistilRoBERTa
-
-```bash
-python training/train_distilroberta.py --epochs 3
-```
-
-To test positive-class weighting:
-
-```bash
-python training/train_distilroberta.py --epochs 3 --use-pos-weight
-```
-
-For a quick smoke test:
-
-```bash
-python training/train_distilroberta.py --epochs 1 --limit 64
-```
-
-For GPU training, use the provided Google Colab notebook and select a **T4 GPU** runtime.
-
-### Score Contract Risk
-
-```bash
-python risk/score_contracts.py --source gold
-python risk/score_contracts.py --source model --run training/outputs/sqrt_weighted
-```
-
-See [`risk/README.md`](risk/README.md) for the scoring rules and first results.
-
----
-
-## Current Status
-
-### Completed
-
-- CUAD data exploration
-- JSON → DataFrame conversion
-- class imbalance analysis
-- category-level EDA
-- cleaning investigation
-- chunking experiments
-- TF-IDF + Logistic Regression baseline
-- initial Low / Medium / High risk rubric
-- paragraph-aware tokenization pipeline
-- DistilRoBERTa training pipeline implementation
-- final tokenized dataset generated and validated (chunker token-count fix, ~99% span coverage)
-- initial DistilRoBERTa baseline trained (unweighted and sqrt-weighted)
-- class-imbalance handling (capped sqrt weighting + tuned thresholds)
-- per-category evaluation vs TF-IDF and first error analysis
-- first rule-based risk-scoring layer (`risk/`): clause register, contract triage buckets, sensitivity analysis, and keyword rules from the error analysis (Change Of Control backstop, Termination For Convenience check)
-- expanded error analysis across all 19 risk-rubric categories; evidence-qualified model rules and rubric boundary clarifications (category tiers unchanged)
-
-### In Progress
-
-- more robust threshold selection (cross-validation instead of 40 validation contracts)
-- calibrating risk-score cutoffs for model confidences (the model currently under-ranks Medium contracts)
-
-### Next Steps
-
-- review error-analysis rows with the advisor
-- confirm the "four signals" and the risk weights with the advisor
-- validate risk rankings with advisor-reviewed examples
-- integrate classification and risk scoring into an end-to-end pipeline
-
----
-
-## Evaluation Strategy
-
-Clause classification is evaluated primarily using:
-
-- per-category Precision
-- per-category Recall
-- per-category F1
-- micro F1
-- macro F1
-
-Both **chunk-level** and **contract-level** performance are considered.
-
-Contract-level transformer scores are generated by aggregating predictions across a contract's chunks.
-
-For the future risk-scoring layer, planned evaluation includes comparison against advisor-ranked examples using:
-
-- ranking agreement
-- bucket agreement
-- sensitivity analysis around Low / Medium / High boundaries
-
----
+Challenge advisor: Accenture · Program: [Break Through Tech AI](https://www.breakthroughtech.org/)
 
 ## Limitations
 
-- CUAD contains clause annotations but does not contain validated Low / Medium / High risk labels.
-- Category prevalence is highly imbalanced.
-- Some categories have very few positive examples.
-- Risk depends heavily on contractual context and party perspective.
-- Category-level risk assignments should not automatically determine the final risk of an individual clause.
-- The system is designed for triage and prioritization, not autonomous legal decision-making.
-- Human review remains necessary for consequential legal or business decisions.
+- CUAD annotates clauses but has no validated Low / Medium / High risk labels, so risk levels come from a rubric, not ground truth.
+- Categories are highly imbalanced, and some have very few examples.
+- Real risk depends on context and on which party you represent.
+- The system is for triage. Consequential legal or business decisions need human review.
 
----
+## Acknowledgments and License
 
-## Project Goal
-
-The long-term goal is an auditable contract-review pipeline that can:
-
-1. identify important contractual clauses,
-2. surface the relevant evidence,
-3. estimate preliminary risk,
-4. prioritize contracts or clauses for human review.
+Data: CUAD v1 by The Atticus Project, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Thanks to Break Through Tech AI and Accenture for the challenge and mentorship.
